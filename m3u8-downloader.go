@@ -47,6 +47,7 @@ var (
 	spFlag  = flag.String("sp", "", "savePath:The absolute path of the file (default is the current path, default is recommended).")
 
 	logger *log.Logger
+
 	ro     = &grequests.RequestOptions{
 		UserAgent:      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.88 Safari/537.36",
 		RequestTimeout: HEAD_TIMEOUT,
@@ -66,7 +67,8 @@ type TsInfo struct {
 }
 
 func init() {
-	logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
+	//logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
+	logger = log.New(os.Stdout, "", 0)
 }
 
 func main() {
@@ -243,11 +245,11 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 	if err != nil || !res.Ok {
 		if retries > 0 {
 			downloadTsFile(ts, download_dir, key, retries-1)
-			return
 		} else {
-			//logger.Printf("[warn] File :%s", ts.Url)
-			return
+			logger.Printf("\n[error] File :%s\n", ts.Url)
+			logger.Fatal(err)
 		}
+		return
 	}
 	// Checksum length for legality
 	var origData []byte
@@ -258,8 +260,11 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 		contentLen, _ = strconv.Atoi(contentLenStr)
 	}
 	if len(origData) == 0 || (contentLen > 0 && len(origData) < contentLen) || res.Error != nil {
-		//logger.Println("[warn] File: " + ts.Name + "res origData invalid or err：", res.Error)
-		downloadTsFile(ts, download_dir, key, retries-1)
+		if retries > 0 {
+			downloadTsFile(ts, download_dir, key, retries-1)
+		} else {
+			logger.Fatal("\n[error] File: " + ts.Name + " res origData invalid or err：", res.Error)
+		}
 		return
 	}
 	// Decrypting out video ts source files
@@ -267,7 +272,12 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 		//Decrypt ts file, algorithm: aes 128 cbc pack5
 		origData, err = AesDecrypt(origData, []byte(key))
 		if err != nil {
-			downloadTsFile(ts, download_dir, key, retries-1)
+			if retries > 0 {
+				downloadTsFile(ts, download_dir, key, retries-1)
+				return
+			} else {
+				logger.Fatal("\n[error] File decryption: " +  err.Error())
+			}
 			return
 		}
 	}
