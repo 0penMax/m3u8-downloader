@@ -40,7 +40,7 @@ var (
 	urlFlag = flag.String("u", "", "m3u8 download address (http(s)://url/xx/xx/index.m3u8)")
 	nFlag   = flag.Int("n", 24, "num:Number of download threads (default 24)")
 	htFlag  = flag.String("ht", "v1", "Number of download threads (default 24) hostType: set the way to getHost (v1: `http(s):// + url.Host + filepath.Dir(url.Path)`; v2: `http(s)://+ u. Host`)")
-	oFlag   = flag.String("o", "movie", "movieName:Customized filename (defaults to movie) without a suffix")
+	oFlag   = flag.String("o", fmt.Sprintf("movie-%d",time.Now().Unix()), "movieName:Customized filename (defaults to movie) without a suffix")
 	cFlag   = flag.String("c", "", "cookie:Customizing request cookies")
 	rFlag   = flag.Bool("r", true, "autoClear:Whether to automatically clear ts files")
 	sFlag   = flag.Int("s", 0, "InsecureSkipVerify:Whether to allow insecure requests (default 0)")
@@ -106,7 +106,17 @@ func Run() {
 	pwd, _ := os.Getwd()
 	if savePath != "" {
 		pwd = savePath
+	}else {
+		df, err := getDownloadsFolder()
+		if err!=nil{
+			log.Fatal(err)
+			return
+		}
+		pwd = df
 	}
+
+
+
 	// Initialize the directory for downloading ts, where all later ts files will be saved.
 	download_dir = filepath.Join(pwd, movieName)
 	if isExist, _ := pathExists(download_dir); !isExist {
@@ -451,4 +461,42 @@ func checkErr(e error) {
 	if e != nil {
 		logger.Panic(e)
 	}
+}
+
+
+func getDownloadsFolder() (string, error) {
+	var downloadsPath string
+
+	switch runtime.GOOS {
+	case "windows":
+		// On Windows, use the USERPROFILE environment variable
+		homeDir, exists := os.LookupEnv("USERPROFILE")
+		if !exists {
+			return "", fmt.Errorf("could not determine home directory")
+		}
+		downloadsPath = filepath.Join(homeDir, "Downloads")
+	case "darwin":
+		// On macOS, use the HOME environment variable
+		homeDir, exists := os.LookupEnv("HOME")
+		if !exists {
+			return "", fmt.Errorf("could not determine home directory")
+		}
+		downloadsPath = filepath.Join(homeDir, "Downloads")
+	case "linux":
+		// On Linux, use XDG_DOWNLOAD_DIR or default to ~/Downloads
+		xdgDownloadsDir, exists := os.LookupEnv("XDG_DOWNLOAD_DIR")
+		if exists {
+			downloadsPath = xdgDownloadsDir
+		} else {
+			homeDir, exists := os.LookupEnv("HOME")
+			if !exists {
+				return "", fmt.Errorf("could not determine home directory")
+			}
+			downloadsPath = filepath.Join(homeDir, "Downloads")
+		}
+	default:
+		return "", fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+	}
+
+	return downloadsPath, nil
 }
