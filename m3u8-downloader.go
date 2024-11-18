@@ -28,7 +28,7 @@ import (
 
 const (
 	// Request header timeout
-	HEAD_TIMEOUT = 5 * time.Second
+	HEAD_TIMEOUT = 30 * time.Second
 	// Progress bar length
 	PROGRESS_WIDTH = 20
 	// ts video clip naming rules
