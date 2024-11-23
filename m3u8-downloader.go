@@ -1,6 +1,3 @@
-// @author:llychao<lychao_vip@163.com>
-// @contributor: Junyi<me@junyi.pw>
-// @date:2020-02-18
 // @功能:golang m3u8 video Downloader
 package main
 
@@ -91,6 +88,15 @@ func Run() {
 	cookie := *cFlag
 	insecure := *sFlag
 	savePath := *spFlag
+	
+
+	args := flag.Args()
+	if len(args) == 2 {
+		m3u8Url = args[0]
+		movieName = args[1]
+	}else if len(args) == 1 {
+		m3u8Url = args[0]
+	}
 
 	ro.Headers["Referer"] = getHost(m3u8Url, "v2")
 	if insecure != 0 {
