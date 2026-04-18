@@ -364,15 +364,20 @@ func downloader(tsList []TsInfo, maxGoroutines int, downloadDir string, key stri
 				<-limiter
 			}()
 			downloadTsFile(ts, downloadDir, key, retryies, fail)
-			downloadCount++
-			DrawProgressBar("Downloading", float32(downloadCount)/float32(tsLen), PROGRESS_WIDTH, ts.Name)
+			if !tsDownloadFail {
+				downloadCount++
+				DrawProgressBar("Downloading", float32(downloadCount)/float32(tsLen), PROGRESS_WIDTH, ts.Name)
+			}
 			return
 		}(ts, downloadDir, key, retry, &tsDownloadFail)
 		if tsDownloadFail {
-			return errors.New("download fail")
+			break
 		}
 	}
 	wg.Wait()
+	if tsDownloadFail {
+		return errors.New("download fail")
+	}
 
 	return nil
 }
