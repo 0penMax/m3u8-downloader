@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -120,7 +121,7 @@ func Run() {
 	} else {
 		df, err := getDownloadsFolder()
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
 			return
 		}
 		pwd = df
@@ -132,14 +133,15 @@ func Run() {
 		os.MkdirAll(download_dir, os.ModePerm)
 	}
 
-	//cleanTempFilesFunc := func() {
-	//	if autoClearFlag {
-	//		//Automatic clearing of the ts file directory
-	//		os.RemoveAll(download_dir)
-	//	}
-	//}
+	cleanTempFilesFunc := func() {
+		if autoClearFlag {
+			//Automatic clearing of the ts file directory
+			os.RemoveAll(download_dir)
+			log.Println("auto cleaned temp files")
+		}
+	}
 
-	//defer cleanTempFilesFunc()
+	defer cleanTempFilesFunc()
 
 	// 2. Parse m3u8
 	m3u8Host := getHost(m3u8Url, hostType)
@@ -153,7 +155,12 @@ func Run() {
 	fmt.Println("Number of ts files to be downloaded:", len(ts_list))
 
 	// 3. Download ts file to download_dir
-	downloader(ts_list, maxGoroutines, download_dir, ts_key)
+	err := downloader(ts_list, maxGoroutines, download_dir, ts_key)
+	if err != nil {
+		log.Println()
+		log.Println(err)
+		return
+	}
 	if ok := checkTsDownDir(download_dir); !ok {
 		fmt.Printf("\n[Failed] Please check the validity of the url address \n")
 		return
@@ -161,10 +168,6 @@ func Run() {
 
 	// 4. Merge ts cut files into mp4 files
 	mv := mergeTs(download_dir)
-	if autoClearFlag {
-		//Automatic clearing of the ts file directory
-		os.RemoveAll(download_dir)
-	}
 
 	//5. Output download video information
 	DrawProgressBar("Merging", float32(1), PROGRESS_WIDTH, mv)
@@ -273,17 +276,12 @@ func getTsList(host, body string) (tsList []TsInfo) {
 	return
 }
 
-func getFromFile() string {
-	data, _ := ioutil.ReadFile("./ts.txt")
-	return string(data)
-}
-
 // Download ts file
 // @modify: 2020-08-13 Fix the problem that SyncByte merge in ts format can't be played.
-func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
+func downloadTsFile(ts TsInfo, download_dir, key string, retries int, fail *bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			downloadTsFile(ts, download_dir, key, retries-1)
+			downloadTsFile(ts, download_dir, key, retries-1, fail)
 		}
 	}()
 	curr_path_file := fmt.Sprintf("%s/%s", download_dir, ts.Name)
@@ -294,11 +292,12 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 	body, status, headers, err := httpGet(ts.Url)
 	if err != nil || status != 200 {
 		if retries > 0 {
-			downloadTsFile(ts, download_dir, key, retries-1)
+			downloadTsFile(ts, download_dir, key, retries-1, fail)
 		} else {
 			logger.Printf("\n[error] File: %s\n", ts.Url)
 			logger.Println("status code:", status)
-			logger.Fatal(err)
+			logger.Println(err)
+			*fail = true
 		}
 		return
 	}
@@ -312,9 +311,10 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 	}
 	if len(origData) == 0 || (contentLen > 0 && len(origData) < contentLen) || err != nil {
 		if retries > 0 {
-			downloadTsFile(ts, download_dir, key, retries-1)
+			downloadTsFile(ts, download_dir, key, retries-1, fail)
 		} else {
-			logger.Fatal("\n[error] File: "+ts.Name+" res origData invalid or err：", err)
+			logger.Println("\n[error] File: "+ts.Name+" res origData invalid or err：", err)
+			*fail = true
 		}
 		return
 	}
@@ -324,10 +324,11 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 		origData, err = AesDecrypt(origData, []byte(key))
 		if err != nil {
 			if retries > 0 {
-				downloadTsFile(ts, download_dir, key, retries-1)
+				downloadTsFile(ts, download_dir, key, retries-1, fail)
 				return
 			} else {
-				logger.Fatal("\n[error] File decryption: " + err.Error())
+				logger.Println("[error] File decryption: " + err.Error())
+				*fail = true
 			}
 			return
 		}
@@ -347,27 +348,33 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 }
 
 // downloader m3u8
-func downloader(tsList []TsInfo, maxGoroutines int, downloadDir string, key string) {
+func downloader(tsList []TsInfo, maxGoroutines int, downloadDir string, key string) error {
 	retry := 5 //Number of retries for a single ts download
 	var wg sync.WaitGroup
 	limiter := make(chan struct{}, maxGoroutines) //chan struct memory occupied 0 bool occupied 1
 	tsLen := len(tsList)
 	downloadCount := 0
+	var tsDownloadFail bool = false
 	for _, ts := range tsList {
 		wg.Add(1)
 		limiter <- struct{}{}
-		go func(ts TsInfo, downloadDir, key string, retryies int) {
+		go func(ts TsInfo, downloadDir, key string, retryies int, fail *bool) {
 			defer func() {
 				wg.Done()
 				<-limiter
 			}()
-			downloadTsFile(ts, downloadDir, key, retryies)
+			downloadTsFile(ts, downloadDir, key, retryies, fail)
 			downloadCount++
 			DrawProgressBar("Downloading", float32(downloadCount)/float32(tsLen), PROGRESS_WIDTH, ts.Name)
 			return
-		}(ts, downloadDir, key, retry)
+		}(ts, downloadDir, key, retry, &tsDownloadFail)
+		if tsDownloadFail {
+			return errors.New("download fail")
+		}
 	}
 	wg.Wait()
+
+	return nil
 }
 
 func checkTsDownDir(dir string) bool {
