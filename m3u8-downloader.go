@@ -3,13 +3,15 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -19,8 +21,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/levigross/grequests/v2"
 )
 
 const (
@@ -44,18 +44,16 @@ var (
 	spFlag  = flag.String("sp", "", "savePath:The absolute path of the file (default is the current path, default is recommended).")
 
 	logger *log.Logger
-
-	ro = &grequests.RequestOptions{
-		UserAgent:      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.88 Safari/537.36",
-		RequestTimeout: HEAD_TIMEOUT,
-		Headers: map[string]string{
-			"Connection":      "keep-alive",
-			"Accept":          "*/*",
-			"Accept-Encoding": "*",
-			"Accept-Language": "zh-CN,zh;q=0.9, en;q=0.8, de;q=0.7, *;q=0.5",
-		},
-	}
 )
+
+var httpClient *http.Client
+var defaultHeaders = map[string]string{
+	"User-Agent":      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6)",
+	"Connection":      "keep-alive",
+	"Accept":          "*/*",
+	"Accept-Encoding": "*",
+	"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
 
 // TsInfo Used to save the download address and filename of the ts file
 type TsInfo struct {
@@ -97,13 +95,19 @@ func Run() {
 		m3u8Url = args[0]
 	}
 
-	ro.Headers["Referer"] = getHost(m3u8Url, "v2")
-	if insecure != 0 {
-		ro.InsecureSkipVerify = true
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure != 0},
 	}
-	// http customizable cookie
+
+	httpClient = &http.Client{
+		Timeout:   HEAD_TIMEOUT,
+		Transport: transport,
+	}
+
+	// dynamic headers
+	defaultHeaders["Referer"] = getHost(m3u8Url, "v2")
 	if cookie != "" {
-		ro.Headers["Cookie"] = cookie
+		defaultHeaders["Cookie"] = cookie
 	}
 	if !strings.HasPrefix(m3u8Url, "http") || m3u8Url == "" {
 		flag.Usage()
@@ -127,6 +131,15 @@ func Run() {
 	if isExist, _ := pathExists(download_dir); !isExist {
 		os.MkdirAll(download_dir, os.ModePerm)
 	}
+
+	//cleanTempFilesFunc := func() {
+	//	if autoClearFlag {
+	//		//Automatic clearing of the ts file directory
+	//		os.RemoveAll(download_dir)
+	//	}
+	//}
+
+	//defer cleanTempFilesFunc()
 
 	// 2. Parse m3u8
 	m3u8Host := getHost(m3u8Url, hostType)
@@ -158,6 +171,26 @@ func Run() {
 	fmt.Printf("\n[Success] Download Save Path：%s | total duration: %6.2fs\n", mv, time.Now().Sub(now).Seconds())
 }
 
+func httpGet(url string) ([]byte, int, http.Header, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+
+	for k, v := range defaultHeaders {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	return body, resp.StatusCode, resp.Header, err
+}
+
 // Get the host of the m3u8 address
 func getHost(Url, ht string) (host string) {
 	u, err := url.Parse(Url)
@@ -173,9 +206,9 @@ func getHost(Url, ht string) (host string) {
 
 // Get the content body of the m3u8 address
 func getM3u8Body(Url string) string {
-	r, err := grequests.Get(context.Background(), Url, grequests.FromRequestOptions(ro))
+	body, _, _, err := httpGet(Url)
 	checkErr(err)
-	return r.String()
+	return string(body)
 }
 
 // Get key for m3u8 encryption
@@ -190,10 +223,10 @@ func getM3u8Key(host, html string) (key string) {
 			if !strings.Contains(line, "http") {
 				key_url = fmt.Sprintf("%s/%s", host, key_url)
 			}
-			res, err := grequests.Get(context.Background(), key_url, grequests.FromRequestOptions(ro))
+			resBody, status, _, err := httpGet(key_url)
 			checkErr(err)
-			if res.StatusCode == 200 {
-				key = res.String()
+			if status == 200 {
+				key = string(resBody)
 			}
 		}
 	}
@@ -258,30 +291,30 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 		//logger.Println("[warn] File: " + ts.Name + "already exist")
 		return
 	}
-	res, err := grequests.Get(context.Background(), ts.Url, grequests.FromRequestOptions(ro))
-	if err != nil || !res.Ok {
+	body, status, headers, err := httpGet(ts.Url)
+	if err != nil || status != 200 {
 		if retries > 0 {
 			downloadTsFile(ts, download_dir, key, retries-1)
 		} else {
 			logger.Printf("\n[error] File: %s\n", ts.Url)
-			logger.Println("status code:", res.StatusCode)
+			logger.Println("status code:", status)
 			logger.Fatal(err)
 		}
 		return
 	}
 	// Checksum length for legality
 	var origData []byte
-	origData = res.Bytes()
+	origData = body
 	contentLen := 0
-	contentLenStr := res.Header.Get("Content-Length")
+	contentLenStr := headers.Get("Content-Length")
 	if contentLenStr != "" {
 		contentLen, _ = strconv.Atoi(contentLenStr)
 	}
-	if len(origData) == 0 || (contentLen > 0 && len(origData) < contentLen) || res.Error != nil {
+	if len(origData) == 0 || (contentLen > 0 && len(origData) < contentLen) || err != nil {
 		if retries > 0 {
 			downloadTsFile(ts, download_dir, key, retries-1)
 		} else {
-			logger.Fatal("\n[error] File: "+ts.Name+" res origData invalid or err：", res.Error)
+			logger.Fatal("\n[error] File: "+ts.Name+" res origData invalid or err：", err)
 		}
 		return
 	}
