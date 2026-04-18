@@ -1,9 +1,9 @@
-// @功能:golang m3u8 video Downloader
 package main
 
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"flag"
@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/levigross/grequests"
+	"github.com/levigross/grequests/v2"
 )
 
 const (
@@ -35,9 +35,9 @@ const (
 var (
 	// command-line parameter
 	urlFlag = flag.String("u", "", "m3u8 download address (http(s)://url/xx/xx/index.m3u8)")
-	nFlag   = flag.Int("n", 24, "num:Number of download threads (default 24)")
+	nFlag   = flag.Int("n", 4, "num:Number of download threads (default 24)")
 	htFlag  = flag.String("ht", "v1", "Number of download threads (default 24) hostType: set the way to getHost (v1: `http(s):// + url.Host + filepath.Dir(url.Path)`; v2: `http(s)://+ u. Host`)")
-	oFlag   = flag.String("o", fmt.Sprintf("movie-%d",time.Now().Unix()), "movieName:Customized filename (defaults to movie) without a suffix")
+	oFlag   = flag.String("o", fmt.Sprintf("movie-%d", time.Now().Unix()), "movieName:Customized filename (defaults to movie) without a suffix")
 	cFlag   = flag.String("c", "", "cookie:Customizing request cookies")
 	rFlag   = flag.Bool("r", true, "autoClear:Whether to automatically clear ts files")
 	sFlag   = flag.Int("s", 0, "InsecureSkipVerify:Whether to allow insecure requests (default 0)")
@@ -45,7 +45,7 @@ var (
 
 	logger *log.Logger
 
-	ro     = &grequests.RequestOptions{
+	ro = &grequests.RequestOptions{
 		UserAgent:      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.88 Safari/537.36",
 		RequestTimeout: HEAD_TIMEOUT,
 		Headers: map[string]string{
@@ -88,13 +88,12 @@ func Run() {
 	cookie := *cFlag
 	insecure := *sFlag
 	savePath := *spFlag
-	
 
 	args := flag.Args()
 	if len(args) == 2 {
 		m3u8Url = args[0]
 		movieName = args[1]
-	}else if len(args) == 1 {
+	} else if len(args) == 1 {
 		m3u8Url = args[0]
 	}
 
@@ -114,16 +113,14 @@ func Run() {
 	pwd, _ := os.Getwd()
 	if savePath != "" {
 		pwd = savePath
-	}else {
+	} else {
 		df, err := getDownloadsFolder()
-		if err!=nil{
+		if err != nil {
 			log.Fatal(err)
 			return
 		}
 		pwd = df
 	}
-
-
 
 	// Initialize the directory for downloading ts, where all later ts files will be saved.
 	download_dir = filepath.Join(pwd, movieName)
@@ -176,7 +173,7 @@ func getHost(Url, ht string) (host string) {
 
 // Get the content body of the m3u8 address
 func getM3u8Body(Url string) string {
-	r, err := grequests.Get(Url, ro)
+	r, err := grequests.Get(context.Background(), Url, grequests.FromRequestOptions(ro))
 	checkErr(err)
 	return r.String()
 }
@@ -193,7 +190,7 @@ func getM3u8Key(host, html string) (key string) {
 			if !strings.Contains(line, "http") {
 				key_url = fmt.Sprintf("%s/%s", host, key_url)
 			}
-			res, err := grequests.Get(key_url, ro)
+			res, err := grequests.Get(context.Background(), key_url, grequests.FromRequestOptions(ro))
 			checkErr(err)
 			if res.StatusCode == 200 {
 				key = res.String()
@@ -261,12 +258,13 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 		//logger.Println("[warn] File: " + ts.Name + "already exist")
 		return
 	}
-	res, err := grequests.Get(ts.Url, ro)
+	res, err := grequests.Get(context.Background(), ts.Url, grequests.FromRequestOptions(ro))
 	if err != nil || !res.Ok {
 		if retries > 0 {
 			downloadTsFile(ts, download_dir, key, retries-1)
 		} else {
-			logger.Printf("\n[error] File :%s\n", ts.Url)
+			logger.Printf("\n[error] File: %s\n", ts.Url)
+			logger.Println("status code:", res.StatusCode)
 			logger.Fatal(err)
 		}
 		return
@@ -283,7 +281,7 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 		if retries > 0 {
 			downloadTsFile(ts, download_dir, key, retries-1)
 		} else {
-			logger.Fatal("\n[error] File: " + ts.Name + " res origData invalid or err：", res.Error)
+			logger.Fatal("\n[error] File: "+ts.Name+" res origData invalid or err：", res.Error)
 		}
 		return
 	}
@@ -296,7 +294,7 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 				downloadTsFile(ts, download_dir, key, retries-1)
 				return
 			} else {
-				logger.Fatal("\n[error] File decryption: " +  err.Error())
+				logger.Fatal("\n[error] File decryption: " + err.Error())
 			}
 			return
 		}
@@ -315,7 +313,7 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int) {
 	ioutil.WriteFile(curr_path_file, origData, 0666)
 }
 
-// downloader m3u8 
+// downloader m3u8
 func downloader(tsList []TsInfo, maxGoroutines int, downloadDir string, key string) {
 	retry := 5 //Number of retries for a single ts download
 	var wg sync.WaitGroup
@@ -492,7 +490,6 @@ func checkErr(e error) {
 		logger.Panic(e)
 	}
 }
-
 
 func getDownloadsFolder() (string, error) {
 	var downloadsPath string
