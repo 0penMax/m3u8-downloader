@@ -207,24 +207,38 @@ func getTsList(host, body string) (tsList []TsInfo) {
 	lines := strings.Split(body, "\n")
 	index := 0
 	var ts TsInfo
+
+	// Normalize host: replace backslashes and trim trailing slash
+	host = strings.ReplaceAll(host, "\\", "/")
+	host = strings.TrimRight(host, "/")
+
 	for _, line := range lines {
-		if !strings.HasPrefix(line, "#") && line != "" {
-			//Please convert m3u8 to secondary nested format if possible!
-			index++
-			if strings.HasPrefix(line, "http") {
-				ts = TsInfo{
-					Name: fmt.Sprintf(TS_NAME_TEMPLATE, index),
-					Url:  line,
-				}
-				tsList = append(tsList, ts)
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Normalize line: replace backslashes with forward slashes
+		line = strings.ReplaceAll(line, "\\", "/")
+
+		index++
+		var url string
+		if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
+			url = line
+		} else {
+			// Ensure we don't produce double slashes when joining
+			if strings.HasPrefix(line, "/") {
+				url = host + line
 			} else {
-				ts = TsInfo{
-					Name: fmt.Sprintf(TS_NAME_TEMPLATE, index),
-					Url:  fmt.Sprintf("%s/%s", host, line),
-				}
-				tsList = append(tsList, ts)
+				url = host + "/" + line
 			}
 		}
+
+		ts = TsInfo{
+			Name: fmt.Sprintf(TS_NAME_TEMPLATE, index),
+			Url:  url,
+		}
+		tsList = append(tsList, ts)
 	}
 	return
 }
