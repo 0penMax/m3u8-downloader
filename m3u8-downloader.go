@@ -212,6 +212,7 @@ func Run(c config) error {
 	}
 
 	//5. Output download video information
+	fmt.Println()
 	DrawProgressBar("Merging", float32(1), PROGRESS_WIDTH, mv)
 	fmt.Printf("\n[Success] Download Save Path：%s | total duration: %6.2fs\n", mv, time.Now().Sub(now).Seconds())
 	return nil
