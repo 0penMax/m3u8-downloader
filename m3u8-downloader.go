@@ -26,7 +26,7 @@ import (
 
 const (
 	// Request header timeout
-	HEAD_TIMEOUT = 30 * time.Second
+	HEAD_TIMEOUT = 15 * time.Second
 	// Progress bar length
 	PROGRESS_WIDTH = 20
 	// ts video clip naming rules
@@ -35,14 +35,14 @@ const (
 
 var (
 	// command-line parameter
-	urlFlag = flag.String("u", "", "m3u8 download address (http(s)://url/xx/xx/index.m3u8)")
-	nFlag   = flag.Int("n", 4, "num:Number of download threads (default 24)")
-	htFlag  = flag.String("ht", "v1", "Number of download threads (default 24) hostType: set the way to getHost (v1: `http(s):// + url.Host + filepath.Dir(url.Path)`; v2: `http(s)://+ u. Host`)")
-	oFlag   = flag.String("o", fmt.Sprintf("movie-%d", time.Now().Unix()), "movieName:Customized filename (defaults to movie) without a suffix")
-	cFlag   = flag.String("c", "", "cookie:Customizing request cookies")
-	rFlag   = flag.Bool("r", true, "autoClear:Whether to automatically clear ts files")
-	sFlag   = flag.Int("s", 0, "InsecureSkipVerify:Whether to allow insecure requests (default 0)")
-	spFlag  = flag.String("sp", "", "savePath:The absolute path of the file (default is the current path, default is recommended).")
+	urlFlag    = flag.String("u", "", "m3u8 download address (http(s)://url/xx/xx/index.m3u8)")
+	nFlag      = flag.Int("n", 4, "num:Number of download threads (default 4)")
+	htAutoFlag = flag.Bool("htAuto", true, "Automatic try hostType V2, if V1 return error")
+	htFlag     = flag.String("ht", "v1", "HostType: set the way to getHost (v1: `http(s):// + url.Host + filepath.Dir(url.Path)`; v2: `http(s)://+ u. Host`)")
+	oFlag      = flag.String("o", fmt.Sprintf("movie-%d", time.Now().Unix()), "movieName:Customized filename (defaults to movie) without a suffix")
+	cFlag      = flag.String("c", "", "cookie:Customizing request cookies")
+	sFlag      = flag.Int("s", 0, "InsecureSkipVerify:Whether to allow insecure requests (default 0)")
+	spFlag     = flag.String("sp", "", "savePath:The absolute path of the file (default is the current path, default is recommended).")
 
 	logger *log.Logger
 )
@@ -53,7 +53,7 @@ var defaultHeaders = map[string]string{
 	"Connection":      "keep-alive",
 	"Accept":          "*/*",
 	"Accept-Encoding": "*",
-	"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+	"Accept-Language": "en-US,zh;q=0.9,en;q=0.8",
 }
 
 // TsInfo Used to save the download address and filename of the ts file
@@ -68,25 +68,15 @@ func init() {
 }
 
 func main() {
-	Run()
-}
-
-func Run() {
-	msgTpl := "[Function]:Multi-threaded download of live streaming m3u8 video \n [Reminder]:Download failed, please use -ht=v2 \n [Reminder]:Download failed, m3u8 address may be nested \n [Reminder]:Progress bar failed to download in the middle of the process, can repeat execution"
+	msgTpl := "[Function]:Multi-threaded download of live streaming m3u8 video  \n [Reminder]:Download failed, m3u8 address may be nested"
 	fmt.Println(msgTpl)
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	now := time.Now()
 
 	// 1. Parsing command line parameters
 	flag.Parse()
 	m3u8Url := *urlFlag
-	maxGoroutines := *nFlag
-	hostType := *htFlag
 	movieName := *oFlag
-	autoClearFlag := *rFlag
-	cookie := *cFlag
 	insecure := *sFlag
-	savePath := *spFlag
 
 	args := flag.Args()
 	if len(args) == 2 {
@@ -105,73 +95,128 @@ func Run() {
 		Transport: transport,
 	}
 
-	// dynamic headers
-	defaultHeaders["Referer"] = getHost(m3u8Url, "v2")
-	if cookie != "" {
-		defaultHeaders["Cookie"] = cookie
-	}
 	if !strings.HasPrefix(m3u8Url, "http") || m3u8Url == "" {
 		flag.Usage()
 		return
 	}
-	var download_dir string
+
+	conf := config{
+		url:           m3u8Url,
+		maxGoroutines: *nFlag,
+		hostType:      *htFlag,
+		movieName:     movieName,
+		cookie:        *cFlag,
+		savePath:      *spFlag,
+	}
+
+	err := Run(conf)
+
+	switch {
+	case errors.Is(err, errDownload):
+		logger.Println("download failed with err:", err)
+		logger.Println("Try HostType V2")
+		if *htAutoFlag && *htFlag != "v2" {
+			conf.hostType = "v2"
+			err = Run(conf)
+			if err != nil {
+				logger.Println(err)
+			}
+		}
+
+	case err == nil:
+	default:
+		log.Println(err)
+	}
+
+}
+
+var errDownload = errors.New("download failed")
+
+type config struct {
+	cookie        string
+	url           string
+	hostType      string
+	savePath      string
+	movieName     string
+	maxGoroutines int
+}
+
+func Run(c config) error {
+	now := time.Now()
+	// dynamic headers
+	host, err := getHost(c.url, c.hostType)
+	if err != nil {
+		return err
+	}
+	defaultHeaders["Referer"] = host
+	defaultHeaders["Cookie"] = c.cookie
+
+	var downloadDir string
 	pwd, _ := os.Getwd()
-	if savePath != "" {
-		pwd = savePath
+	if c.savePath != "" {
+		pwd = c.savePath
 	} else {
 		df, err := getDownloadsFolder()
 		if err != nil {
-			log.Println(err)
-			return
+			return err
 		}
 		pwd = df
 	}
 
 	// Initialize the directory for downloading ts, where all later ts files will be saved.
-	download_dir = filepath.Join(pwd, movieName)
-	if isExist, _ := pathExists(download_dir); !isExist {
-		os.MkdirAll(download_dir, os.ModePerm)
+	downloadDir = filepath.Join(pwd, c.movieName)
+	if isExist, _ := pathExists(downloadDir); !isExist {
+		os.MkdirAll(downloadDir, os.ModePerm)
 	}
 
 	cleanTempFilesFunc := func() {
-		if autoClearFlag {
-			//Automatic clearing of the ts file directory
-			os.RemoveAll(download_dir)
-			log.Println("auto cleaned temp files")
-		}
+		//Automatic clearing of the ts file directory
+		os.RemoveAll(downloadDir)
+		log.Println("auto cleaned temp files")
 	}
 
 	defer cleanTempFilesFunc()
 
 	// 2. Parse m3u8
-	m3u8Host := getHost(m3u8Url, hostType)
-	m3u8Body := getM3u8Body(m3u8Url)
-	//m3u8Body := getFromFile()
-	ts_key := getM3u8Key(m3u8Host, m3u8Body)
-	if ts_key != "" {
-		fmt.Printf("ts file key to be decrypted : %s \n", ts_key)
+	m3u8Host, err := getHost(c.url, c.hostType)
+	if err != nil {
+		return err
 	}
-	ts_list := getTsList(m3u8Host, m3u8Body)
-	fmt.Println("Number of ts files to be downloaded:", len(ts_list))
+	m3u8Body, err := getM3u8Body(c.url)
+	if err != nil {
+		return err
+	}
+	tsKey, err := getM3u8Key(m3u8Host, m3u8Body)
+	if err != nil {
+		return err
+	}
+	if tsKey != "" {
+		fmt.Printf("ts file key to be decrypted : %s \n", tsKey)
+	}
+	tsList := getTsList(m3u8Host, m3u8Body)
+	fmt.Println("Number of ts files to be downloaded:", len(tsList))
 
-	// 3. Download ts file to download_dir
-	err := downloader(ts_list, maxGoroutines, download_dir, ts_key)
+	// 3. Download ts file to downloadDir
+	err = downloader(tsList, c.maxGoroutines, downloadDir, tsKey)
 	if err != nil {
 		log.Println()
 		log.Println(err)
-		return
+		return errDownload
 	}
-	if ok := checkTsDownDir(download_dir); !ok {
-		fmt.Printf("\n[Failed] Please check the validity of the url address \n")
-		return
+	if ok := checkTsDownDir(downloadDir); !ok {
+		return errors.New(fmt.Sprintf("\n[Failed] Please check the validity of the url address \n"))
 	}
 
 	// 4. Merge ts cut files into mp4 files
-	mv := mergeTs(download_dir)
+	mv, err := mergeTs(downloadDir)
+	if err != nil {
+		return err
+	}
 
 	//5. Output download video information
 	DrawProgressBar("Merging", float32(1), PROGRESS_WIDTH, mv)
 	fmt.Printf("\n[Success] Download Save Path：%s | total duration: %6.2fs\n", mv, time.Now().Sub(now).Seconds())
+	return nil
 }
 
 func httpGet(url string) ([]byte, int, http.Header, error) {
@@ -195,9 +240,11 @@ func httpGet(url string) ([]byte, int, http.Header, error) {
 }
 
 // Get the host of the m3u8 address
-func getHost(Url, ht string) (host string) {
+func getHost(Url, ht string) (host string, err error) {
 	u, err := url.Parse(Url)
-	checkErr(err)
+	if err != nil {
+		return "", err
+	}
 	switch ht {
 	case "v1":
 		host = u.Scheme + "://" + u.Host + filepath.Dir(u.EscapedPath())
@@ -208,14 +255,16 @@ func getHost(Url, ht string) (host string) {
 }
 
 // Get the content body of the m3u8 address
-func getM3u8Body(Url string) string {
+func getM3u8Body(Url string) (string, error) {
 	body, _, _, err := httpGet(Url)
-	checkErr(err)
-	return string(body)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }
 
 // Get key for m3u8 encryption
-func getM3u8Key(host, html string) (key string) {
+func getM3u8Key(host, html string) (key string, err error) {
 	lines := strings.Split(html, "\n")
 	key = ""
 	for _, line := range lines {
@@ -227,7 +276,9 @@ func getM3u8Key(host, html string) (key string) {
 				key_url = fmt.Sprintf("%s/%s", host, key_url)
 			}
 			resBody, status, _, err := httpGet(key_url)
-			checkErr(err)
+			if err != nil {
+				return "", err
+			}
 			if status == 200 {
 				key = string(resBody)
 			}
@@ -344,7 +395,10 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int, fail *bool
 			break
 		}
 	}
-	ioutil.WriteFile(curr_path_file, origData, 0666)
+	err = os.WriteFile(curr_path_file, origData, 0666)
+	if err != nil {
+		logger.Println(err)
+	}
 }
 
 // downloader m3u8
@@ -390,7 +444,7 @@ func checkTsDownDir(dir string) bool {
 }
 
 // Merge ts file
-func mergeTs(downloadDir string) string {
+func mergeTs(downloadDir string) (string, error) {
 	mvName := downloadDir + ".mp4"
 	outMv, _ := os.Create(mvName)
 	defer outMv.Close()
@@ -406,9 +460,11 @@ func mergeTs(downloadDir string) string {
 		_, err = writer.Write(bytes)
 		return err
 	})
-	checkErr(err)
+	if err != nil {
+		return "", err
+	}
 	_ = writer.Flush()
-	return mvName
+	return mvName, nil
 }
 
 // progress bar
@@ -528,12 +584,6 @@ func AesDecrypt(crypted, key []byte, ivs ...[]byte) ([]byte, error) {
 	blockMode.CryptBlocks(origData, crypted)
 	origData = PKCS7UnPadding(origData)
 	return origData, nil
-}
-
-func checkErr(e error) {
-	if e != nil {
-		logger.Panic(e)
-	}
 }
 
 func getDownloadsFolder() (string, error) {
