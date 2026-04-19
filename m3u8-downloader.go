@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -28,7 +27,7 @@ const (
 	// Request header timeout
 	HEAD_TIMEOUT = 15 * time.Second
 	// Progress bar length
-	PROGRESS_WIDTH = 20
+	PROGRESS_WIDTH = 30
 	// ts video clip naming rules
 	TS_NAME_TEMPLATE = "%05d.ts"
 )
@@ -63,7 +62,6 @@ type TsInfo struct {
 }
 
 func init() {
-	//logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
 	logger = log.New(os.Stdout, "", 0)
 }
 
@@ -114,8 +112,8 @@ func main() {
 	switch {
 	case errors.Is(err, errDownload):
 		logger.Println("download failed with err:", err)
-		logger.Println("Try HostType V2")
 		if *htAutoFlag && *htFlag != "v2" {
+			logger.Println("Try HostType V2")
 			conf.hostType = "v2"
 			err = Run(conf)
 			if err != nil {
@@ -475,7 +473,6 @@ func DrawProgressBar(prefix string, proportion float32, width int, suffix ...str
 	fmt.Print("\r" + s)
 }
 
-// ============================== Shell-related ==============================
 // Determine if a file exists
 func pathExists(path string) (bool, error) {
 	_, err := os.Stat(path)
@@ -487,54 +484,6 @@ func pathExists(path string) (bool, error) {
 	}
 	return false, err
 }
-
-// Execute the shell
-func execUnixShell(s string) {
-	cmd := exec.Command("bash", "-c", s)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	err := cmd.Run()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("%s", out.String())
-}
-
-func execWinShell(s string) error {
-	cmd := exec.Command("cmd", "/C", s)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	err := cmd.Run()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%s", out.String())
-	return nil
-}
-
-// windows
-func win_merge_file(path string) {
-	pwd, _ := os.Getwd()
-	os.Chdir(path)
-	execWinShell("copy /b *.ts merge.tmp")
-	execWinShell("del /Q *.ts")
-	os.Rename("merge.tmp", "merge.mp4")
-	os.Chdir(pwd)
-}
-
-// unix
-func unix_merge_file(path string) {
-	pwd, _ := os.Getwd()
-	os.Chdir(path)
-	//cmd := `ls  *.ts |sort -t "\." -k 1 -n |awk '{print $0}' |xargs -n 1 -I {} bash -c "cat {} >> new.tmp"`
-	cmd := `cat *.ts >> merge.tmp`
-	execUnixShell(cmd)
-	execUnixShell("rm -rf *.ts")
-	os.Rename("merge.tmp", "merge.mp4")
-	os.Chdir(pwd)
-}
-
-// ============================== Implementation of shella ==============================
 
 func PKCS7Padding(ciphertext []byte, blockSize int) []byte {
 	padding := blockSize - len(ciphertext)%blockSize
