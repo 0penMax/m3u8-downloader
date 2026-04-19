@@ -38,7 +38,7 @@ var (
 	nFlag      = flag.Int("n", 4, "num:Number of download threads (default 4)")
 	htAutoFlag = flag.Bool("htAuto", true, "Automatic try hostType V2, if V1 return error")
 	htFlag     = flag.String("ht", "v1", "HostType: set the way to getHost (v1: `http(s):// + url.Host + filepath.Dir(url.Path)`; v2: `http(s)://+ u. Host`)")
-	oFlag      = flag.String("o", fmt.Sprintf("movie-%d", time.Now().Unix()), "movieName:Customized filename (defaults to movie) without a suffix")
+	oFlag      = flag.String("o", fmt.Sprintf("movie-%d", time.Now().Unix()), "movieName:Customized filename (default is movie-nowUnixTime)")
 	cFlag      = flag.String("c", "", "cookie:Customizing request cookies")
 	sFlag      = flag.Int("s", 0, "InsecureSkipVerify:Whether to allow insecure requests (default 0)")
 	spFlag     = flag.String("sp", "", "savePath:The absolute path of the file (default is the current path, default is recommended).")
@@ -325,14 +325,7 @@ func getTsList(host, body string) (tsList []TsInfo) {
 	return
 }
 
-// Download ts file
-// @modify: 2020-08-13 Fix the problem that SyncByte merge in ts format can't be played.
 func downloadTsFile(ts TsInfo, download_dir, key string, retries int, fail *bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			downloadTsFile(ts, download_dir, key, retries-1, fail)
-		}
-	}()
 	curr_path_file := fmt.Sprintf("%s/%s", download_dir, ts.Name)
 	if isExist, _ := pathExists(curr_path_file); isExist {
 		//logger.Println("[warn] File: " + ts.Name + "already exist")
@@ -358,7 +351,7 @@ func downloadTsFile(ts TsInfo, download_dir, key string, retries int, fail *bool
 	if contentLenStr != "" {
 		contentLen, _ = strconv.Atoi(contentLenStr)
 	}
-	if len(origData) == 0 || (contentLen > 0 && len(origData) < contentLen) || err != nil {
+	if len(origData) == 0 || (contentLen > 0 && len(origData) < contentLen) {
 		if retries > 0 {
 			downloadTsFile(ts, download_dir, key, retries-1, fail)
 		} else {
