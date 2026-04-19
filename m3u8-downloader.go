@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -164,12 +163,18 @@ func Run(c config) error {
 	// Initialize the directory for downloading ts, where all later ts files will be saved.
 	downloadDir = filepath.Join(pwd, c.movieName)
 	if isExist, _ := pathExists(downloadDir); !isExist {
-		os.MkdirAll(downloadDir, os.ModePerm)
+		err = os.MkdirAll(downloadDir, os.ModePerm)
+		if err != nil {
+			logger.Fatal(err)
+		}
 	}
 
 	cleanTempFilesFunc := func() {
 		//Automatic clearing of the ts file directory
-		os.RemoveAll(downloadDir)
+		err = os.RemoveAll(downloadDir)
+		if err != nil {
+			logger.Fatal(err)
+		}
 		log.Println("auto cleaned temp files")
 	}
 
@@ -305,21 +310,21 @@ func getTsList(host, body string) (tsList []TsInfo) {
 		line = strings.ReplaceAll(line, "\\", "/")
 
 		index++
-		var url string
+		var Url string
 		if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
-			url = line
+			Url = line
 		} else {
 			// Ensure we don't produce double slashes when joining
 			if strings.HasPrefix(line, "/") {
-				url = host + line
+				Url = host + line
 			} else {
-				url = host + "/" + line
+				Url = host + "/" + line
 			}
 		}
 
 		ts = TsInfo{
 			Name: fmt.Sprintf(TS_NAME_TEMPLATE, index),
-			Url:  url,
+			Url:  Url,
 		}
 		tsList = append(tsList, ts)
 	}
@@ -448,8 +453,8 @@ func mergeTs(downloadDir string) (string, error) {
 		if f.IsDir() || filepath.Ext(path) != ".ts" {
 			return nil
 		}
-		bytes, _ := ioutil.ReadFile(path)
-		_, err = writer.Write(bytes)
+		Bytes, _ := os.ReadFile(path)
+		_, err = writer.Write(Bytes)
 		return err
 	})
 	if err != nil {
